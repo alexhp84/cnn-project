@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vision - Model details</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+           background: linear-gradient(160deg, #eef2ff 0%, #f8fafc 60%); color: #1e293b; padding: 20px 14px 40px; }
+    header { text-align: center; max-width: 900px; margin: 16px auto 24px; }
+    header h1 { margin: 0 0 4px; font-size: 1.7rem; letter-spacing: -.02em; }
+    header p { margin: 0 0 10px; color: #64748b; }
+    a { color: #4f46e5; font-weight: 600; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .card { max-width: 900px; margin: 0 auto 18px; background: #fff; border-radius: 20px; padding: 22px;
+            box-shadow: 0 4px 24px rgba(30, 41, 59, .08); }
+    .card h2 { margin: 0 0 4px; font-size: 1.3rem; }
+    .classes { color: #64748b; font-size: .92rem; margin-bottom: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .stat { background: #f8faff; border: 1px solid #e0e7ff; border-radius: 12px; padding: 10px 12px; }
+    .stat .v { font-size: 1.25rem; font-weight: 700; }
+    .stat .k { font-size: .78rem; color: #64748b; text-transform: uppercase; letter-spacing: .05em; }
+    .stat.main { background: #eef2ff; border-color: #c7d2fe; }
+    .stat.main .v { color: #4338ca; }
+    .imgs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+    .imgs figure { margin: 0; }
+    .imgs img { width: 100%; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+    .imgs figcaption { font-size: .82rem; color: #64748b; margin-top: 4px; text-align: center; }
+    .msg { text-align: center; color: #64748b; }
+    footer { text-align: center; color: #94a3b8; font-size: .85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Model details</h1>
+    <p>Training results for each CNN used by the classifier.</p>
+    <a href="/">← Back to the classifier</a>
+  </header>
+
+  <div id="list"><div class="card msg">Loading…</div></div>
+  <footer>Convolutional neural networks built with TensorFlow / Keras</footer>
+
+<script>
+const pct = v => (v == null ? "n/a" : (v * 100).toFixed(2) + "%");
+const pretty = s => s.replace(/_/g, " ");
+
+fetch("/api/models")
+  .then(r => r.json())
+  .then(list => {
+    if (!list.length) {
+      document.getElementById("list").innerHTML = '<div class="card msg">No models loaded.</div>';
+      return;
+    }
+    document.getElementById("list").innerHTML = list.map(m => {
+      const evalLabel = m.evaluated_on ? (m.evaluated_on[0].toUpperCase() + m.evaluated_on.slice(1)) + " accuracy" : "Accuracy";
+      return `<div class="card">
+        <h2>${m.label}</h2>
+        <div class="classes">${m.classes.length} classes: ${m.classes.map(pretty).join(", ")}</div>
+        <div class="stats">
+          <div class="stat main"><div class="v">${pct(m.accuracy)}</div><div class="k">${evalLabel}</div></div>
+          <div class="stat"><div class="v">${pct(m.train_accuracy)}</div><div class="k">Train accuracy</div></div>
+          <div class="stat"><div class="v">${pct(m.val_accuracy)}</div><div class="k">Validation accuracy</div></div>
+          <div class="stat"><div class="v">${m.epochs ?? "n/a"}</div><div class="k">Epochs run</div></div>
+          <div class="stat"><div class="v">${m.input_size}</div><div class="k">Input size</div></div>
+          <div class="stat"><div class="v">${m.parameters.toLocaleString()}</div><div class="k">Parameters</div></div>
+        </div>
+        <div class="imgs">
+          ${m.curves ? `<figure><img src="${m.curves}" alt="Accuracy and loss curves"><figcaption>Accuracy and loss</figcaption></figure>` : ""}
+          ${m.confusion_matrix ? `<figure><img src="${m.confusion_matrix}" alt="Confusion matrix"><figcaption>Confusion matrix</figcaption></figure>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+  })
+  .catch(() => {
+    document.getElementById("list").innerHTML = '<div class="card msg">Could not load model details. Is the server running?</div>';
+  });
+</script>
+</body>
+</html>
