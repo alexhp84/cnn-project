@@ -1,14 +1,28 @@
-"""
-FastAPI backend for the CNN Project.
+"""CNN image-analysis FastAPI backend.
 
-Keep this file as main.py. Put the website in index.html and model artefacts
-(.keras/.h5) in the project directory or a subdirectory named models/.
-Run:
-    uvicorn main:app --host 0.0.0.0 --port 8000
+Expected layout:
+  main.py
+  index.html
+  static/styles.css
+  static/app.js
+  models/router_model.keras
+  models/router_class_names.json
+  models/fer_model.keras
+  models/fer_class_names.json
+  models/fruits_model.keras
+  models/fruits_class_names.json
+  models/mask_model.keras
+  models/mask_class_names.json
+
+The router chooses ONE specialist classifier, so the UI does not show
+Emotion, Fruit, and Mask results for every uploaded image.
 """
+from __future__ import annotations
+
+import json
+import logging
 from pathlib import Path
 from typing import Any
-import logging
 
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -17,235 +31,221 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 
 BASE_DIR = Path(__file__).resolve().parent
-RESULTS_DIR = BASE_DIR / "results"
 MODELS_DIR = BASE_DIR / "models"
+STATIC_DIR = BASE_DIR / "static"
+SUPPORTED_SUFFIXES = {".keras", ".h5", ".hdf5"}
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cnn-project")
 
-app = FastAPI(
-    title="CNN Image Analysis API",
-    description=(
-        "API for the CNN Image Analysis project. Classifies uploaded images using "
-        "available emotion, fruit, and face-mask models; exposes health status and "
-        "serves the web interface and model-result artefacts. Use POST /predict "
-        "to submit an image. Interactive documentation is available at /docs."
-    ),
-    version="1.1.0",
-    contact={
-        "name": "CNN Project API",
-    },
-    openapi_tags=[
-        {"name": "Website", "description": "HTML pages for the image-analysis application and results dashboard."},
-        {"name": "Prediction", "description": "Image upload and classification operations."},
-        {"name": "System", "description": "Backend health and model-loading status."},
-        {"name": "Model results", "description": "Training graphs and history artefacts saved in the results directory."},
-    ],
-)
+CONFIDENCE_THRESHOLD = 0.60
 
-# Keep the labels in the same order used when each model was trained.
-LABELS = {
-    "fer": ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"],
-    "emotion": ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"],
-    "fruit": ["Apple", "Avocado", "Banana", "Eggplant", "Tomato"],
-    "fruits": ["Apple", "Avocado", "Banana", "Eggplant", "Tomato"],
-    "mask": ["with_mask", "without_mask"],
-}
+app = FastAPI(title="CNN Image Analysis API", version="2.1.0")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-MODEL_KEYWORDS = {
-    "fer": ("fer", "emotion", "angry"),
-    "fruits": ("fruit", "fruits"),
-    "mask": ("mask", "face_mask", "facemask"),
+MODEL_FILES = {
+    "router": ("router_model.keras", "router_class_names.json"),
+    "emotion": ("fer_model.keras", "fer_class_names.json"),
+    "fruit": ("fruits_model.keras", "fruits_class_names.json"),
+    "mask": ("mask_model.keras", "mask_class_names.json"),
 }
-SUPPORTED_MODEL_SUFFIXES = {".keras", ".h5", ".hdf5"}
-_loaded_models: dict[str, Any] = {}
+DISPLAY_NAMES = {"emotion": "Emotion", "fruit": "Fruit", "mask": "Mask"}
+_models: dict[str, Any] = {}
+_labels: dict[str, list[str]] = {}
 _model_errors: dict[str, str] = {}
 
 
-def find_model_file(key: str) -> Path | None:
-    """Find a model file by keyword; explicit models/ folder is preferred."""
-    candidates = []
+def _find_model(key: str) -> Path | None:
+    expected = MODEL_FILES[key][0]
+    direct = MODELS_DIR / expected
+    if direct.is_file():
+        return direct
+    stem = Path(expected).stem.lower()
     for root in (MODELS_DIR, BASE_DIR):
         if root.exists():
-            candidates.extend(
-                p for p in root.rglob("*")
-                if p.is_file() and p.suffix.lower() in SUPPORTED_MODEL_SUFFIXES
-            )
-    # Don't accidentally search through virtual environments or hidden folders.
-    candidates = [
-        p for p in candidates
-        if not any(part.startswith(".") or part in {"venv", ".venv", "__pycache__"}
-                   for part in p.relative_to(BASE_DIR).parts)
-    ]
-    keywords = MODEL_KEYWORDS[key]
-    matches = [
-        p for p in candidates
-        if any(word in p.stem.lower() for word in keywords)
-    ]
-    # Avoid duplicate paths if models/ is also nested below the project.
-    matches = sorted(set(matches), key=lambda p: (0 if MODELS_DIR in p.parents else 1, len(p.parts)))
-    return matches[0] if matches else None
+            for path in root.rglob("*"):
+                if (path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
+                        and stem in path.stem.lower()
+                        and not any(p.startswith(".") or p in {"venv", ".venv", "__pycache__"}
+                                    for p in path.relative_to(BASE_DIR).parts)):
+                    return path
+    return None
 
 
-def load_models() -> None:
-    """Load any model files that can be matched to the supported model types."""
-    try:
-        from importlib import import_module
-
-        load_model = import_module("tensorflow.keras.models").load_model
-    except Exception as exc:
-        logger.exception("TensorFlow could not be imported")
-        for key in MODEL_KEYWORDS:
-            _model_errors[key] = f"TensorFlow is unavailable: {exc}"
-        return
-
-    for key in MODEL_KEYWORDS:
-        path = find_model_file(key)
-        if path is None:
-            _model_errors[key] = (
-                f"No {key} model file found. Place its .keras/.h5 file in "
-                f"'{MODELS_DIR.name}/' and include '{key}' in its filename."
-            )
-            logger.warning(_model_errors[key])
-            continue
+def _load_labels(key: str, output_count: int) -> list[str]:
+    labels_file = MODELS_DIR / MODEL_FILES[key][1]
+    if labels_file.is_file():
         try:
-            _loaded_models[key] = load_model(path, compile=False)
-            logger.info("Loaded %s model from %s", key, path)
-        except Exception as exc:
-            _model_errors[key] = f"Could not load {path.name}: {exc}"
-            logger.exception("Failed loading %s model", key)
-
-
-@app.on_event("startup")
-def startup_event() -> None:
-    load_models()
-
-
-def label_names_for(key: str, output_count: int) -> list[str]:
-    labels = LABELS[key]
-    # Use configured labels only when their count matches the model output.
+            data = json.loads(labels_file.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                labels = [str(x) for x in data]
+            elif isinstance(data, dict):
+                if all(str(k).isdigit() for k in data):
+                    labels = [str(data[k]) for k in sorted(data, key=lambda x: int(x))]
+                elif all(str(v).isdigit() for v in data.values()):
+                    labels = [str(k) for k, v in sorted(data.items(), key=lambda item: int(item[1]))]
+                else:
+                    labels = [str(v) for v in data.values()]
+            else:
+                labels = []
+            if len(labels) == output_count:
+                return labels
+            logger.warning("%s has %d labels but model outputs %d classes", labels_file, len(labels), output_count)
+        except Exception:
+            logger.exception("Could not read labels file %s", labels_file)
+    fallback = {
+        "emotion": ["angry", "disgust", "fear", "happy", "neutral", "sad", "surprise"],
+        "fruit": ["Apple", "Avocado", "Banana", "Eggplant", "Tomato"],
+        "mask": ["with_mask", "without_mask"],
+    }
+    labels = fallback.get(key, [])
     if len(labels) == output_count:
         return labels
     return [f"class_{i}" for i in range(output_count)]
 
 
-def prepare_image(image: Image.Image, model: Any) -> np.ndarray:
-    """Resize and colour-convert using the model's declared input shape."""
+def _load_models() -> None:
+    try:
+        from tensorflow.keras.models import load_model
+    except Exception as exc:
+        for key in MODEL_FILES:
+            _model_errors[key] = f"TensorFlow import failed: {exc}"
+        logger.exception("TensorFlow could not be imported")
+        return
+
+    for key in MODEL_FILES:
+        path = _find_model(key)
+        if path is None:
+            _model_errors[key] = f"Model file not found: {MODEL_FILES[key][0]}"
+            logger.warning(_model_errors[key])
+            continue
+        try:
+            _models[key] = load_model(path, compile=False)
+            output_shape = _models[key].output_shape
+            if isinstance(output_shape, list):
+                output_shape = output_shape[0]
+            _labels[key] = _load_labels(key, int(output_shape[-1]))
+            logger.info("Loaded %s from %s with labels %s", key, path, _labels[key])
+            _model_errors.pop(key, None)
+        except Exception as exc:
+            _model_errors[key] = str(exc)
+            logger.exception("Failed to load %s model", key)
+
+
+@app.on_event("startup")
+def startup() -> None:
+    _load_models()
+
+
+def _prepare_image(image: Image.Image, model: Any) -> np.ndarray:
     shape = model.input_shape
     if isinstance(shape, list):
         shape = shape[0]
-    # Expected NHWC or NCHW input; standard Keras image models are NHWC.
-    height = int(shape[1]) if len(shape) == 4 and shape[1] not in (None, 1, 3, 4) else 224
-    width = int(shape[2]) if len(shape) == 4 and shape[2] not in (None, 1, 3, 4) else 224
-    channels = shape[-1] if len(shape) == 4 else 3
+    if len(shape) == 4:
+        height = int(shape[1]) if shape[1] is not None else 224
+        width = int(shape[2]) if shape[2] is not None else 224
+        channels = shape[-1] if shape[-1] in (1, 3, 4) else 3
+    else:
+        height, width, channels = 224, 224, 3
 
     if channels == 1:
         image = image.convert("L").resize((width, height))
-        array = np.asarray(image, dtype=np.float32)[..., np.newaxis]
+        arr = np.asarray(image, dtype=np.float32)[..., None]
     else:
         image = image.convert("RGB").resize((width, height))
-        array = np.asarray(image, dtype=np.float32)
-
-    # Common image models are trained on 0..1 pixel values. If your training
-    # pipeline used a different preprocessing scheme, match it here.
-    array = array / 255.0
-    return np.expand_dims(array, axis=0)
+        arr = np.asarray(image, dtype=np.float32)
+    # Match this to the preprocessing used when training each model.
+    arr /= 255.0
+    return np.expand_dims(arr, axis=0)
 
 
-def prediction_for(key: str, image: Image.Image) -> dict[str, Any]:
-    model = _loaded_models[key]
-    batch = prepare_image(image, model)
-    raw = np.asarray(model.predict(batch, verbose=0))
+def _predict_scores(key: str, image: Image.Image) -> tuple[list[str], np.ndarray]:
+    model = _models[key]
+    raw = np.asarray(model.predict(_prepare_image(image, model), verbose=0))
     scores = raw[0].astype(float).reshape(-1)
-
-    # Most classification models return softmax probabilities. If outputs do
-    # not look like probabilities, convert logits to a stable softmax.
     if np.any(scores < 0) or not np.isclose(float(scores.sum()), 1.0, atol=0.05):
         scores = scores - np.max(scores)
         scores = np.exp(scores)
         scores = scores / max(float(scores.sum()), 1e-12)
+    labels = _labels.get(key) or [f"class_{i}" for i in range(len(scores))]
+    if len(labels) != len(scores):
+        labels = [f"class_{i}" for i in range(len(scores))]
+    return labels, scores
 
-    labels = label_names_for(key, len(scores))
+
+def _normalise_label(label: str) -> str:
+    return label.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _route_to_specialist(router_label: str) -> str | None:
+    """Map the router model's class label to one specialist model."""
+    label = _normalise_label(router_label)
+    if any(token in label for token in ("fruit", "apple", "banana", "avocado", "tomato", "eggplant")):
+        return "fruit"
+    if any(token in label for token in ("mask", "masked", "without_mask", "with_mask", "no_mask")):
+        return "mask"
+    if any(token in label for token in ("face", "person", "human", "emotion", "angry", "happy", "sad", "fear", "neutral", "surprise", "disgust")):
+        return "emotion"
+    # Handle common generic router labels such as "faces", "fruits", and "masks".
+    if label in {"fruit", "fruits"}:
+        return "fruit"
+    if label in {"mask", "masks", "face_mask"}:
+        return "mask"
+    if label in {"face", "faces", "emotion", "emotions"}:
+        return "emotion"
+    return None
+
+
+def _make_result(key: str, labels: list[str], scores: np.ndarray) -> dict[str, Any]:
+    idx = int(np.argmax(scores))
+    confidence = float(scores[idx])
     probabilities = {label: float(score) for label, score in zip(labels, scores)}
-    best_index = int(np.argmax(scores))
+
+    # Reject low-confidence predictions on the server, before the UI displays them.
+    if confidence < CONFIDENCE_THRESHOLD:
+        return {
+            "model": DISPLAY_NAMES[key],
+            "prediction": "UNABLE TO IDENTIFY",
+            "confidence": confidence,
+            "threshold": CONFIDENCE_THRESHOLD,
+            "status": "THREAT TO ORDER. SENT TO ROOM 101, MINISTRY OF LOVE FOR EDUCATION"
+        }
+
     return {
-        "model": {"fer": "Emotion", "fruits": "Fruit", "mask": "Mask"}[key],
-        "prediction": labels[best_index],
-        "confidence": float(scores[best_index]),
+        "model": DISPLAY_NAMES[key],
+        "prediction": labels[idx],
+        "confidence": confidence,
+        "threshold": CONFIDENCE_THRESHOLD,
+        "status": "IDENTIFIED",
+        "message": f"Prediction met the {CONFIDENCE_THRESHOLD:.0%} confidence threshold.",
         "probabilities": probabilities,
     }
 
-
-@app.get(
-    "/",
-    tags=["Website"],
-    summary="Open the image-analysis application",
-    description="Returns the index.html frontend. This route serves HTML rather than JSON.",
-    response_description="The image-analysis web page.",
-    responses={404: {"description": "index.html was not found in the project directory."}},
-)
+@app.get("/", include_in_schema=False)
 def home():
-    index_file = BASE_DIR / "index.html"
-    if not index_file.exists():
-        raise HTTPException(status_code=404, detail="index.html was not found in the project directory.")
-    return FileResponse(index_file)
+    path = BASE_DIR / "index.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="index.html not found")
+    return FileResponse(path)
 
 
-@app.get(
-    "/results.html",
-    tags=["Website"],
-    summary="Open the model results dashboard",
-    description="Returns results.html, which displays model metrics and the pre-generated training graphs.",
-    response_description="The model results HTML page.",
-    responses={404: {"description": "results.html was not found in the project directory."}},
-)
+@app.get("/results.html", include_in_schema=False)
 def results_page():
-    results_file = BASE_DIR / "results.html"
-    if not results_file.exists():
-        raise HTTPException(status_code=404, detail="results.html was not found in the project directory.")
-    return FileResponse(results_file)
+    path = BASE_DIR / "results.html"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="results.html not found")
+    return FileResponse(path)
 
 
-@app.get(
-    "/health",
-    tags=["System"],
-    summary="Check API and model status",
-    description=(
-        "Returns API status, the keys of models successfully loaded, and any model "
-        "loading or prediction errors. A status of 'ok' means the API process is responding; "
-        "check loaded_models to confirm which classifiers are available."
-    ),
-    response_description="Current backend and model status.",
-)
+@app.get("/health", tags=["System"])
 def health():
-    return {
-        "status": "ok",
-        "loaded_models": sorted(_loaded_models.keys()),
-        "model_errors": _model_errors,
-    }
+    return {"status": "ok", "loaded_models": sorted(_models), "model_errors": _model_errors}
 
 
-@app.post(
-    "/predict",
-    tags=["Prediction"],
-    summary="Classify an uploaded image",
-    description=(
-        "Upload one image using multipart/form-data with the field name 'file'. "
-        "The API runs each available emotion, fruit, and mask model and returns "
-        "the top prediction, confidence, and per-class scores for each available model. "
-        "Supported images depend on Pillow's installed codecs; PNG and JPEG are recommended. "
-        "Images are resized to each model's input dimensions and pixel values are normalised to 0–1."
-    ),
-    response_description="A list of predictions produced by the available models.",
-    responses={
-        400: {"description": "No image supplied, empty upload, unsupported content type, or invalid/unsupported image."},
-        503: {"description": "No classification models are available. The response includes model_errors."},
-    },
-)
+@app.post("/predict", tags=["Prediction"])
 async def predict(file: UploadFile = File(...)):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Please upload an image file.")
-
     try:
         contents = await file.read()
         if not contents:
@@ -257,51 +257,39 @@ async def predict(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="This image format is unsupported or the file is invalid. Try PNG or JPEG.",
-        ) from exc
+        raise HTTPException(status_code=400, detail="Unsupported image. Try PNG or JPEG.") from exc
 
-    results = []
-    for key in ("fer", "fruits", "mask"):
-        if key not in _loaded_models:
-            continue
+    # Preferred path: the router chooses exactly one specialist model.
+    if "router" in _models:
         try:
-            results.append(prediction_for(key, image))
+            route_labels, route_scores = _predict_scores("router", image)
+            route_label = route_labels[int(np.argmax(route_scores))]
+            specialist = _route_to_specialist(route_label)
+            logger.info("Router chose %r -> %r", route_label, specialist)
+            if specialist and specialist in _models:
+                labels, scores = _predict_scores(specialist, image)
+                return {"filename": file.filename, "route": route_label,
+                        "results": [_make_result(specialist, labels, scores)]}
+            # Do not silently run all three models if routing is ambiguous.
+            return {"filename": file.filename, "route": route_label, "results": [],
+                    "message": f"Router returned '{route_label}', which could not be mapped to a specialist model."}
         except Exception as exc:
-            logger.exception("Prediction failed for model %s", key)
-            _model_errors[key] = str(exc)
+            logger.exception("Router prediction failed")
+            raise HTTPException(status_code=500, detail=f"Router prediction failed: {exc}") from exc
 
-    if not results:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "No classification models are currently available.",
-                "model_errors": _model_errors,
-            },
-        )
+    # Without a router, avoid presenting three unrelated predictions. Ask the
+    # user to add router_model.keras, rather than pretending one is the right class.
+    raise HTTPException(
+        status_code=503,
+        detail="The router model is required to select one classifier. Put router_model.keras in models/ and restart the server.",
+    )
 
-    return {"filename": file.filename, "results": results}
 
-@app.get(
-    "/results/{filename}",
-    tags=["Model results"],
-    summary="Retrieve a model-result artefact",
-    description=(
-        "Serves a file from the project's results/ directory, such as a confusion-matrix PNG, "
-        "training-curve PNG, or model-history JSON. Supply only the filename, for example "
-        "'fer_curves.png' or 'fer_history.json'. Files must already exist in results/."
-    ),
-    response_description="The requested PNG image or JSON history file.",
-    responses={
-        404: {"description": "The requested result file does not exist."},
-    },
-)
+@app.get("/results/{filename}", tags=["Model results"])
 def get_result_file(filename: str):
-    # Prevent path traversal and only serve files directly inside results/.
     if Path(filename).name != filename or filename in {"", ".", ".."}:
         raise HTTPException(status_code=404, detail="Result file not found.")
-    result_file = RESULTS_DIR / filename
-    if not result_file.is_file():
+    path = BASE_DIR / "results" / filename
+    if not path.is_file():
         raise HTTPException(status_code=404, detail="Result file not found.")
-    return FileResponse(result_file, filename=result_file.name)
+    return FileResponse(path, filename=path.name)
