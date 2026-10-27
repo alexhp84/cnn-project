@@ -5,8 +5,6 @@ Expected layout:
   index.html
   static/styles.css
   static/app.js
-  models/router_model.keras
-  models/router_class_names.json
   models/fer_model.keras
   models/fer_class_names.json
   models/fruits_model.keras
@@ -14,8 +12,7 @@ Expected layout:
   models/mask_model.keras
   models/mask_class_names.json
 
-The router chooses ONE specialist classifier, so the UI does not show
-Emotion, Fruit, and Mask results for every uploaded image.
+The user selects one specialist classifier: Emotion, Fruit, or Mask. No router model is used.
 """
 from __future__ import annotations
 
@@ -25,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
@@ -40,11 +37,46 @@ logger = logging.getLogger("cnn-project")
 
 CONFIDENCE_THRESHOLD = 0.60
 
-app = FastAPI(title="CNN Image Analysis API", version="2.1.0")
+API_DESCRIPTION = """
+Classifies uploaded images using the specialist CNN selected by the user: **Emotion**, **Fruit**, or **Mask**. The selected classifier is run directly; no routing model is required.
+
+### Prediction
+Use `POST /predict` with an image in the `file` field and a `classifier` field set to `emotion`, `fruit`, or `mask`. Predictions below the configured confidence threshold (60%) are marked `UNABLE TO IDENTIFY`.
+
+### Models
+Place the three specialist `.keras` files and their class-label JSON files in `models/`. `GET /health` reports which models loaded and any loading errors.
+
+### Limitations
+This is an educational image-classification project, not a medical or security decision system.
+Confidence scores are model outputs, not guarantees of correctness. Authentication and upload-size
+limits are not configured; add appropriate controls before exposing the service publicly.
+"""
+
+app = FastAPI(
+    title="CNN Image Analysis API",
+    summary="Choose Emotion, Fruit, or Mask and classify an image with the corresponding CNN model.",
+    description=API_DESCRIPTION,
+    version="2.2.0",
+    contact={"name": "CNN Project API"},
+    license_info={"name": "Educational project"},
+    openapi_tags=[
+        {
+            "name": "Prediction",
+            "description": "Upload an image and receive the prediction from the specialist model selected by the router."
+        },
+        {
+            "name": "System",
+            "description": "Inspect API and model-loading status."
+        },
+        {
+            "name": "Model results",
+            "description": "Download a generated result file by its filename."
+        }
+    ],
+)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 MODEL_FILES = {
-    "router": ("router_model.keras", "router_class_names.json"),
     "emotion": ("fer_model.keras", "fer_class_names.json"),
     "fruit": ("fruits_model.keras", "fruits_class_names.json"),
     "mask": ("mask_model.keras", "mask_class_names.json"),
@@ -177,25 +209,6 @@ def _normalise_label(label: str) -> str:
     return label.strip().lower().replace("-", "_").replace(" ", "_")
 
 
-def _route_to_specialist(router_label: str) -> str | None:
-    """Map the router model's class label to one specialist model."""
-    label = _normalise_label(router_label)
-    if any(token in label for token in ("fruit", "apple", "banana", "avocado", "tomato", "eggplant")):
-        return "fruit"
-    if any(token in label for token in ("mask", "masked", "without_mask", "with_mask", "no_mask")):
-        return "mask"
-    if any(token in label for token in ("face", "person", "human", "emotion", "angry", "happy", "sad", "fear", "neutral", "surprise", "disgust")):
-        return "emotion"
-    # Handle common generic router labels such as "faces", "fruits", and "masks".
-    if label in {"fruit", "fruits"}:
-        return "fruit"
-    if label in {"mask", "masks", "face_mask"}:
-        return "mask"
-    if label in {"face", "faces", "emotion", "emotions"}:
-        return "emotion"
-    return None
-
-
 def _make_result(key: str, labels: list[str], scores: np.ndarray) -> dict[str, Any]:
     idx = int(np.argmax(scores))
     confidence = float(scores[idx])
@@ -208,7 +221,8 @@ def _make_result(key: str, labels: list[str], scores: np.ndarray) -> dict[str, A
             "prediction": "UNABLE TO IDENTIFY",
             "confidence": confidence,
             "threshold": CONFIDENCE_THRESHOLD,
-            "status": "THREAT TO ORDER. SENT TO ROOM 101, MINISTRY OF LOVE FOR EDUCATION"
+            "status": "LOW_CONFIDENCE",
+            "message": f"Prediction did not meet the {CONFIDENCE_THRESHOLD:.0%} confidence threshold."
         }
 
     return {
@@ -221,7 +235,12 @@ def _make_result(key: str, labels: list[str], scores: np.ndarray) -> dict[str, A
         "probabilities": probabilities,
     }
 
-@app.get("/", include_in_schema=False)
+@app.get(
+    "/",
+    tags=["Web pages"],
+    summary="Serve the project home page",
+    description="Returns the main HTML page for the CNN image-classification project.",
+)
 def home():
     path = BASE_DIR / "index.html"
     if not path.is_file():
@@ -229,7 +248,12 @@ def home():
     return FileResponse(path)
 
 
-@app.get("/results.html", include_in_schema=False)
+@app.get(
+    "/results.html",
+    tags=["Web pages"],
+    summary="Serve the results page",
+    description="Returns the HTML page used to display classification results.",
+)
 def results_page():
     path = BASE_DIR / "results.html"
     if not path.is_file():
@@ -237,13 +261,34 @@ def results_page():
     return FileResponse(path)
 
 
-@app.get("/health", tags=["System"])
+@app.get(
+    "/health",
+    tags=["System"],
+    summary="Check API and model status",
+    description="Returns API status, the names of successfully loaded models, and any model-loading errors.",
+    response_description="Current API and model-loading status.",
+)
 def health():
     return {"status": "ok", "loaded_models": sorted(_models), "model_errors": _model_errors}
 
 
-@app.post("/predict", tags=["Prediction"])
-async def predict(file: UploadFile = File(...)):
+@app.post(
+    "/predict",
+    tags=["Prediction"],
+    summary="Classify an uploaded image",
+    description=(
+        "Upload an image as multipart form data using the `file` field and select `classifier` "
+        "as `emotion`, `fruit`, or `mask`. The selected specialist model returns the prediction. "
+        "PNG and JPEG images are recommended."
+    ),
+    response_description="The router class and the selected specialist model's prediction results.",
+    responses={
+        400: {"description": "The upload is empty, is not identified as an image, or cannot be decoded."},
+        422: {"description": "The classifier field is missing or invalid."},
+        503: {"description": "The selected specialist model is unavailable."},
+    },
+)
+async def predict(file: UploadFile = File(...), classifier: str = Form(..., description="Select one: emotion, fruit, or mask", pattern="^(emotion|fruit|mask)$")):
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Please upload an image file.")
     try:
@@ -259,33 +304,33 @@ async def predict(file: UploadFile = File(...)):
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Unsupported image. Try PNG or JPEG.") from exc
 
-    # Preferred path: the router chooses exactly one specialist model.
-    if "router" in _models:
-        try:
-            route_labels, route_scores = _predict_scores("router", image)
-            route_label = route_labels[int(np.argmax(route_scores))]
-            specialist = _route_to_specialist(route_label)
-            logger.info("Router chose %r -> %r", route_label, specialist)
-            if specialist and specialist in _models:
-                labels, scores = _predict_scores(specialist, image)
-                return {"filename": file.filename, "route": route_label,
-                        "results": [_make_result(specialist, labels, scores)]}
-            # Do not silently run all three models if routing is ambiguous.
-            return {"filename": file.filename, "route": route_label, "results": [],
-                    "message": f"Router returned '{route_label}', which could not be mapped to a specialist model."}
-        except Exception as exc:
-            logger.exception("Router prediction failed")
-            raise HTTPException(status_code=500, detail=f"Router prediction failed: {exc}") from exc
-
-    # Without a router, avoid presenting three unrelated predictions. Ask the
-    # user to add router_model.keras, rather than pretending one is the right class.
-    raise HTTPException(
-        status_code=503,
-        detail="The router model is required to select one classifier. Put router_model.keras in models/ and restart the server.",
-    )
+    # Run only the specialist explicitly selected in the UI.
+    specialist = classifier.strip().lower()
+    if specialist not in DISPLAY_NAMES:
+        raise HTTPException(status_code=422, detail="classifier must be emotion, fruit, or mask.")
+    if specialist not in _models:
+        detail = _model_errors.get(specialist, f"The {specialist} model is unavailable.")
+        raise HTTPException(status_code=503, detail=detail)
+    try:
+        labels, scores = _predict_scores(specialist, image)
+        return {
+            "filename": file.filename,
+            "classifier": specialist,
+            "results": [_make_result(specialist, labels, scores)],
+        }
+    except Exception as exc:
+        logger.exception("%s prediction failed", specialist)
+        raise HTTPException(status_code=500, detail=f"{DISPLAY_NAMES[specialist]} prediction failed.") from exc
 
 
-@app.get("/results/{filename}", tags=["Model results"])
+@app.get(
+    "/results/{filename}",
+    tags=["Model results"],
+    summary="Retrieve a result file",
+    description="Returns a file from the project's `results/` directory by filename.",
+    response_description="The requested result file.",
+    responses={404: {"description": "No result file exists with the supplied filename."}},
+)
 def get_result_file(filename: str):
     if Path(filename).name != filename or filename in {"", ".", ".."}:
         raise HTTPException(status_code=404, detail="Result file not found.")

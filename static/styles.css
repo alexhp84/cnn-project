@@ -14,6 +14,10 @@ h1 { text-transform: uppercase; font-size: clamp(1.5rem,4vw,2.4rem); letter-spac
 .nav-links a:hover { border-color: var(--red); background: #252a23; }
 .card { padding: 22px; border-left: 3px solid #727a6d; }
 .status-line { margin-bottom: 14px; }
+.classifier-picker { display: grid; gap: 9px; margin: 0 0 16px; padding: 16px; border: 1px solid var(--line); background: rgba(12,16,13,.8); }
+.classifier-picker label { color: var(--red); font-size: .75rem; font-weight: 700; letter-spacing: .12em; }
+.classifier-picker select { width: 100%; padding: 12px; border: 1px solid #596253; border-radius: 2px; background: #20251f; color: #e7e9e2; font: 700 .9rem var(--mono); }
+.classifier-picker p { margin: 0; color: #a3ab9e; font-size: .8rem; }
 .drop { border: 1px dashed #68715f; padding: 28px 16px; text-align: center; background: #0c100d; }
 .drop.over { border-color: var(--red); background: #211312; }
 .big { font-size: 2.4rem; }
@@ -53,8 +57,17 @@ html[data-theme="light"] body { color: #20251f; background: #d9ddd3; background-
 html[data-theme="light"] .site-header, html[data-theme="light"] .card { background: rgba(241,243,237,.97); border-color: #a8afa1; }
 html[data-theme="light"] .site-header p, html[data-theme="light"] .drop p, html[data-theme="light"] footer { color: #50584d; }
 html[data-theme="light"] .drop { background: #e8ebe3; }
+html[data-theme="light"] .classifier-picker { background: #e8ebe3; }
+html[data-theme="light"] .classifier-picker select { background: #dce1d7; color: #20251f; border-color: #a8afa1; }
+html[data-theme="light"] .classifier-picker p { color: #50584d; }
 html[data-theme="light"] button, html[data-theme="light"] .nav-links a { background: #dce1d7; color: #20251f; border-color: #a8afa1; }
 html[data-theme="light"] .results .res { background: #f5f6f1; border-color: #b9c0b2; }
 html[data-theme="light"] .bar .n, html[data-theme="light"] .bar .p { color: #50584d; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (max-width: 520px) { .card { padding: 15px; } .bar .n { width: 88px; } .nav-links { flex-direction: column; } .theme-toggle { position: absolute; } }
+
+/* Prediction summary: labels use muted blue; outcome status uses green/red. */
+.confidence-label { color: #8faec2; font-weight: 700; letter-spacing: .04em; }
+.status-label { font-weight: 700; line-height: 1.5; }
+.status-accepted { color: #8ba88c; }
+.status-rejected { color: #d97878; }

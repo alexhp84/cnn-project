@@ -23,6 +23,15 @@
   <main>
     <section class="card">
       <div class="status-line">● SYSTEM ONLINE / VISUAL INPUT TERMINAL 01</div>
+      <div class="classifier-picker">
+        <label for="classifier">CLASSIFIER</label>
+        <select id="classifier" name="classifier">
+          <option value="emotion">Emotion recognition</option>
+          <option value="fruit">Fruit classification</option>
+          <option value="mask">Face-mask classification</option>
+        </select>
+        <p>Choose the model that matches the image before submitting it.</p>
+      </div>
       <div id="drop" class="drop">
         <div class="big">▣</div>
         <p>Provide an image for inspection</p>
@@ -36,6 +45,7 @@
         <video id="cameraVideo" autoplay playsinline muted></video>
         <div class="button-row">
           <button id="takeSnapshot" type="button">Capture photo</button>
+          <button id="switchCamera" type="button">Use front camera</button>
           <button id="closeCamera" type="button">Cancel</button>
         </div>
         <p id="cameraMessage" role="status"></p>
