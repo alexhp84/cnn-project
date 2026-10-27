@@ -14,10 +14,6 @@ h1 { text-transform: uppercase; font-size: clamp(1.5rem,4vw,2.4rem); letter-spac
 .nav-links a:hover { border-color: var(--red); background: #252a23; }
 .card { padding: 22px; border-left: 3px solid #727a6d; }
 .status-line { margin-bottom: 14px; }
-.classifier-picker { display: grid; gap: 9px; margin: 0 0 16px; padding: 16px; border: 1px solid var(--line); background: rgba(12,16,13,.8); }
-.classifier-picker label { color: var(--red); font-size: .75rem; font-weight: 700; letter-spacing: .12em; }
-.classifier-picker select { width: 100%; padding: 12px; border: 1px solid #596253; border-radius: 2px; background: #20251f; color: #e7e9e2; font: 700 .9rem var(--mono); }
-.classifier-picker p { margin: 0; color: #a3ab9e; font-size: .8rem; }
 .drop { border: 1px dashed #68715f; padding: 28px 16px; text-align: center; background: #0c100d; }
 .drop.over { border-color: var(--red); background: #211312; }
 .big { font-size: 2.4rem; }
@@ -57,17 +53,67 @@ html[data-theme="light"] body { color: #20251f; background: #d9ddd3; background-
 html[data-theme="light"] .site-header, html[data-theme="light"] .card { background: rgba(241,243,237,.97); border-color: #a8afa1; }
 html[data-theme="light"] .site-header p, html[data-theme="light"] .drop p, html[data-theme="light"] footer { color: #50584d; }
 html[data-theme="light"] .drop { background: #e8ebe3; }
-html[data-theme="light"] .classifier-picker { background: #e8ebe3; }
-html[data-theme="light"] .classifier-picker select { background: #dce1d7; color: #20251f; border-color: #a8afa1; }
-html[data-theme="light"] .classifier-picker p { color: #50584d; }
 html[data-theme="light"] button, html[data-theme="light"] .nav-links a { background: #dce1d7; color: #20251f; border-color: #a8afa1; }
 html[data-theme="light"] .results .res { background: #f5f6f1; border-color: #b9c0b2; }
 html[data-theme="light"] .bar .n, html[data-theme="light"] .bar .p { color: #50584d; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (max-width: 520px) { .card { padding: 15px; } .bar .n { width: 88px; } .nav-links { flex-direction: column; } .theme-toggle { position: absolute; } }
 
-/* Prediction summary: labels use muted blue; outcome status uses green/red. */
-.confidence-label { color: #8faec2; font-weight: 700; letter-spacing: .04em; }
-.status-label { font-weight: 700; line-height: 1.5; }
-.status-accepted { color: #8ba88c; }
-.status-rejected { color: #d97878; }
+
+/* Interaction and accessibility fixes */
+html { min-width: 0; }
+body { overflow-wrap: anywhere; }
+.nav-links a, .page-nav a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  line-height: 1.35;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.nav-links a:focus-visible, .page-nav a:focus-visible, button:focus-visible {
+  outline: 3px solid var(--red);
+  outline-offset: 3px;
+}
+.drop.over { border-color: var(--red); background: #211312; }
+#stage.scanning .scan { display: block; }
+#stage.scanning .scan-label::after { content: " "; }
+#out { min-width: 0; overflow-wrap: anywhere; }
+#out .probability-row {
+  display: grid;
+  grid-template-columns: minmax(70px, 140px) minmax(40px, 1fr) 58px;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+}
+#out .probability-label, #out .probability-value { overflow-wrap: anywhere; }
+#out .probability-track { height: 9px; background: #2c332b; overflow: hidden; }
+#out .probability-fill { height: 100%; background: var(--red); transition: width .35s ease; }
+#out .confidence { font-weight: 700; }
+#out .threshold { font-size: .85rem; }
+#out .room101 { color: var(--red); font-weight: 700; overflow-wrap: anywhere; }
+#out .error { border: 1px solid var(--red); padding: 12px; overflow-wrap: anywhere; }
+button:disabled { opacity: .55; cursor: progress; }
+
+html[data-theme="light"] .drop.over { background: #f6e8e5; }
+html[data-theme="light"] #out .probability-track { background: #d8ddd3; }
+html[data-theme="light"] #out .error { background: #fff0ee; color: #6d1717; }
+html[data-theme="light"] #out .room101 { color: #a51f1f; }
+
+@media (max-width: 520px) {
+  body { padding: 58px 10px 58px; }
+  .site-header { padding: 48px 14px 16px; }
+  .nav-links, .page-nav {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+  .nav-links a, .page-nav a { width: 100%; }
+  .theme-toggle { position: fixed; top: 8px; right: 8px; z-index: 25; }
+  #out .probability-row {
+    grid-template-columns: minmax(68px, 100px) minmax(35px, 1fr) 52px;
+    gap: 7px;
+    font-size: .78rem;
+  }
+}

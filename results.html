@@ -25,9 +25,6 @@
     .history-details pre { overflow:auto; padding:12px; border:1px solid #434b40; white-space:pre-wrap; overflow-wrap:anywhere; }
     html[data-theme="light"] .metric, html[data-theme="light"] .history-details pre { background:#f5f6f1; border-color:#b9c0b2; }
     html[data-theme="light"] .metric .label, html[data-theme="light"] .artifact-grid figcaption, html[data-theme="light"] .hint { color:#50584d; }
-    html[data-theme="light"] .artifact-grid img { background:#fff; border-color:#b9c0b2; }
-    html[data-theme="light"] .page-nav a { border-color:#aab3a3; }
-    html[data-theme="light"] .page-nav a:hover { border-color:#b94a48; }
     @media (max-width:520px) { .artifact-grid { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -36,7 +33,7 @@
   <header class="site-header">
     <div class="eyebrow">MODEL EVALUATION / REPORTING</div>
     <h1>Model Results</h1>
-    <p>Evaluation metrics and saved training artefacts for the three selectable CNN classifiers: Emotion, Fruit and Mask.</p>
+    <p>Training history, learning curves and confusion matrices saved by the CNN project.</p>
     <nav class="page-nav" aria-label="Project links">
       <a href="/">Back to classifier</a>
       <a href="/docs" target="_blank" rel="noopener">API documentation</a>
@@ -50,7 +47,7 @@
     </section>
     <section class="card">
       <div class="status-line">● SAVED MODEL ARTEFACTS</div>
-      <p class="hint">These are existing files in the project's <code>results/</code> directory. Metrics are read from saved training-history JSON files; no values are fabricated. The router is no longer used: choose Emotion, Fruit or Mask on the classifier page.</p>
+      <p class="hint">These are existing files in the project's <code>results/</code> directory. Metrics are read from the saved training-history JSON files; no values are fabricated.</p>
       <div id="artifacts" class="hint">Loading saved artefacts…</div>
     </section>
   </main>
@@ -58,23 +55,14 @@
 <script>
 (() => {
   const $ = id => document.getElementById(id);
-  const rootElement = document.documentElement;
-  const toggle = $("themeToggle");
-  let theme = "dark";
-  try {
-    const saved = localStorage.getItem("vision-theme");
-    if (saved === "light" || saved === "dark") theme = saved;
-  } catch (_) {
-    // Theme still works for this page when browser storage is unavailable.
-  }
-  rootElement.dataset.theme = theme;
-  toggle.textContent = theme === "dark" ? "Light mode" : "Dark mode";
-  toggle.setAttribute("aria-label", "Switch colour theme");
-  toggle.addEventListener("click", () => {
-    const next = rootElement.dataset.theme === "dark" ? "light" : "dark";
-    rootElement.dataset.theme = next;
-    try { localStorage.setItem("vision-theme", next); } catch (_) {}
-    toggle.textContent = next === "dark" ? "Light mode" : "Dark mode";
+  const theme = localStorage.getItem("vision-theme") || "dark";
+  document.documentElement.dataset.theme = theme;
+  $("themeToggle").textContent = theme === "dark" ? "Light mode" : "Dark mode";
+  $("themeToggle").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("vision-theme", next);
+    $("themeToggle").textContent = next === "dark" ? "Light mode" : "Dark mode";
   });
 
   const esc = value => String(value).replace(/[&<>"']/g, ch => ({
@@ -83,7 +71,8 @@
   const models = [
     { key: "fer", label: "Emotion", history: "fer_history.json", curves: "fer_curves.png", matrix: "fer_confusion_matrix.png" },
     { key: "fruits", label: "Fruits", history: "fruits_history.json", curves: "fruits_curves.png", matrix: "fruits_confusion_matrix.png" },
-    { key: "mask", label: "Mask", history: "mask_history.json", curves: "mask_curves.png", matrix: "mask_confusion_matrix.png" }
+    { key: "mask", label: "Mask", history: "mask_history.json", curves: "mask_curves.png", matrix: "mask_confusion_matrix.png" },
+    { key: "router", label: "Router", history: "router_history.json", curves: null, matrix: null }
   ];
   const resultUrl = name => "/results/" + encodeURIComponent(name);
 
